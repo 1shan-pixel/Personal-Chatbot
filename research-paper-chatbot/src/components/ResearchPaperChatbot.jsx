@@ -2,7 +2,8 @@ import React, { useState, useEffect } from 'react';
 
 const fetchArxivPapers = async (topic) => {
   try {
-    const response = await fetch(`http://export.arxiv.org/api/query?search_query=all:${topic}&start=0&max_results=10&sortBy=submittedDate&sortOrder=descending`);
+    const response = await fetch(`/api/fetchPapers?topic=${encodeURIComponent(topic)}`);
+
     const data = await response.text();
     const parser = new DOMParser();
     const xmlDoc = parser.parseFromString(data, "text/xml");
