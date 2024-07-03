@@ -5,7 +5,7 @@ import { tomorrow } from 'react-syntax-highlighter/dist/esm/styles/prism';
 
 const fetchArxivPapers = async (topic) => {
   try {
-    const response = await fetch(`http://export.arxiv.org/api/query?search_query=all:${topic}&start=0&max_results=10&sortBy=submittedDate&sortOrder=descending`);
+    const response = await fetch(`/api/arxiv?topic=${topic}`);
     const data = await response.text();
     const parser = new DOMParser();
     const xmlDoc = parser.parseFromString(data, "text/xml");
@@ -87,7 +87,7 @@ const ResearchPaperChatbot = () => {
     setUserInput('');
 
     try {
-      const response = await fetch('http://localhost:5000/chat', {
+      const response = await fetch('/api/chat', {  // Updated endpoint
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
