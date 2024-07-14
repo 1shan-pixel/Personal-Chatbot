@@ -1,10 +1,16 @@
-from dotenv import load_dotenv
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 import os
+from dotenv import load_dotenv
 from groq import Groq
 import requests
-import subprocess 
+import subprocess
+import spacy
+from serpapi import GoogleSearch
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.metrics.pairwise import cosine_similarity
+from langchain_core.messages import SystemMessage, HumanMessage
+from langchain_groq import ChatGroq
 
 load_dotenv()
 
@@ -12,87 +18,152 @@ app = Flask(__name__)
 CORS(app)
 
 groq_api_key = os.getenv("GROQ_API_KEY")
-client = Groq(api_key= groq_api_key)
+client = Groq(api_key=groq_api_key)
 
-def download_arxiv_pdf(arxiv_id, download_dir,paper_title):
+nlp = spacy.load("en_core_web_sm")
+
+def preprocess_text(text):
+    doc = nlp(text.lower())
+    return " ".join([token.lemma_ for token in doc if not token.is_stop and not token.is_punct and token.pos_ in ['NOUN', 'PROPN', 'ADJ', 'VERB']])
+
+def extract_keywords(text, n=10):
+    processed_text = preprocess_text(text)
+    doc = nlp(processed_text)
+    return [token.text for token in doc][:n]
+
+def calculate_similarity(text1, text2):
+    vectorizer = TfidfVectorizer()
+    tfidf_matrix = vectorizer.fit_transform([text1, text2])
+    return cosine_similarity(tfidf_matrix[0:1], tfidf_matrix[1:2])[0][0]
+
+def recommend_papers(target_paper, all_papers, n_recommendations=5):
+    target_text = preprocess_text(target_paper['title'] + " " + target_paper['summary'])
+    similarities = []
+    
+    for paper in all_papers:
+        if paper['id'] != target_paper['id']:
+            paper_text = preprocess_text(paper['title'] + " " + paper['summary'])
+            similarity = calculate_similarity(target_text, paper_text)
+            similarities.append((paper, similarity))
+    
+    similarities.sort(key=lambda x: x[1], reverse=True)
+    return [paper for paper, _ in similarities[:n_recommendations]]
+
+def download_arxiv_pdf(arxiv_id, download_dir, paper_title):
     try:
-        # Construct the PDF URL using the arXiv ID
-        print(arxiv_id)
-        pdf_url = f'https://arxiv.org/pdf/{arxiv_id}'
+        pdf_url = f'https://arxiv.org/pdf/{arxiv_id}.pdf'
         filename = f'{paper_title}.pdf'
-
-        # Construct the command to run arxiv-downloader
         command = ['arxiv-downloader', pdf_url, '-d', download_dir]
-
-        # Run the command
         result = subprocess.run(command, capture_output=True, text=True)
-
-        # Check if the command was successful
+        
         if result.returncode == 0:
             message = f"PDF downloaded successfully to {os.path.join(download_dir, filename)}"
-            print(message)
             return jsonify({'message': message}), 200
         else:
-            error_message = "Error occurred while downloading the PDF."
-            print(error_message)
-            return jsonify({'error': error_message}), 500
-
+            return jsonify({'error': "Error occurred while downloading the PDF."}), 500
     except Exception as e:
-        error_message = f"Exception occurred: {str(e)}"
-        print(error_message)
-        return jsonify({'error': error_message}), 500
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/scholar-results', methods=['GET'])
+def get_scholar_results():
+    query = request.args.get('q')
+    if not query:
+        return jsonify({'error': 'Missing search query'}), 400
+
+    params = {
+        "engine": "google_scholar",
+        "q": query,
+        "api_key": os.getenv("SERPAPI_API_KEY")
+    }
+
+    search = GoogleSearch(params)
+    results = search.get_dict()
+   
+    papers = [
+        {
+            'id': index + 1,
+            'title': result.get('title', ''),
+            'summary': result.get('snippet', ''),
+            'paper_id': result.get('result_id', ''),
+            'link': result.get('link', '')
+        }
+        for index, result in enumerate(results.get('organic_results', []))
+    ]
+
+    return jsonify(papers)
+
+@app.route('/arxiv-results', methods=['GET'])
+def get_arxiv_results():
+    query = request.args.get('q')
+    if not query:
+        return jsonify({'error': 'Missing search query'}), 400
+
+    url = f'http://export.arxiv.org/api/query?search_query=all:{query}&start=0&max_results=10&sortBy=submittedDate&sortOrder=descending'
+    response = requests.get(url)
+    if response.status_code != 200:
+        return jsonify({'error': 'Failed to fetch arXiv results'}), 500
+
+    return response.text
 
 @app.route('/download-arxiv-pdf', methods=['POST'])
 def download_arxiv_pdf_endpoint():
     data = request.get_json()
-    arXiv_id = data.get('arXiv_id')
+    arxiv_id = data.get('arXiv_id')
     home_dir = os.path.expanduser('~')
     download_dir = os.path.join(home_dir, 'Downloads')
     paper_title = data.get('paper_title')
 
-    if not arXiv_id or not download_dir:
-        return jsonify({'error': 'Missing required parameters: arXiv_id or download_dir'}), 400
+    if not arxiv_id or not paper_title:
+        return jsonify({'error': 'Missing required parameters: arXiv_id or paper_title'}), 400
 
-    return download_arxiv_pdf(arXiv_id, download_dir,paper_title)
-
-
-
-@app.route('/info',methods= ['GET'])
-def response_arXiv():
-    topic = request.args.get('topic')
-    arxiv_url = f'http://export.arxiv.org/api/query?search_query=all:{topic}&start=0&max_results=10&sortBy=submittedDate&sortOrder=descending'
-    response = requests.get(arxiv_url)
-    return response.text
-
+    return download_arxiv_pdf(arxiv_id, download_dir, paper_title)
 
 @app.route('/chat', methods=['POST'])
-def chat():
+def chat_endpoint():
     data = request.json
-    chat_history = data['chatHistory']
-    paper_info = data['paperInfo']
+    chat_history = data.get('chatHistory')
+    paper_info = data.get('paperInfo')
+
+    if not chat_history or not paper_info:
+        return jsonify({'error': 'Missing required fields: chatHistory or paperInfo'}), 400
+
+    system_template = "You are a helpful assistant discussing the research paper titled '{title}'. Here's a brief summary of the paper: {summary}"
     
-    system_message = f"You are a helpful assistant discussing the research paper titled '{paper_info['title']}'. Here's a brief summary of the paper: {paper_info['summary']}"
-    
+    chat = ChatGroq(
+        temperature=0.2,
+        model_name="llama3-70b-8192"
+    )
+
+    # Create the prompt messages
+    system_message = SystemMessage(content=system_template.format(title=paper_info['title'], summary=paper_info['summary']))
+    messages = [system_message] + [
+        HumanMessage(content=msg['content']) if msg['role'] == 'user' else SystemMessage(content=msg['content']) for msg in chat_history
+    ]
+
     try:
-        response = client.chat.completions.create(
-            model="llama3-70b-8192",
-            messages=[
-                {"role": "system", "content": system_message},
-                *chat_history
-            ],
-            max_tokens=500,
-            temperature=0.2
-        )
-        
+        response = chat.invoke(messages)
+
         return jsonify({
-            "content": response.choices[0].message.content,
+            "content": response.content,
             "role": "assistant"
         })
     except Exception as e:
+        print(f"Error: {str(e)}")
         return jsonify({
-            "content": "I'm sorry, I encountered an error while processing your request.",
+            "content": f"I'm sorry, I encountered an error while processing your request: {str(e)}",
             "role": "assistant"
         }), 500
+
+
+@app.route('/recommend-papers', methods=['POST'])
+def api_recommend_papers():
+    data = request.json
+    target_paper = data.get('targetPaper')
+    all_papers = data.get('allPapers')
+    print(target_paper)
+
+    recommendations = recommend_papers(target_paper, all_papers)
+    return jsonify(recommendations)
 
 if __name__ == '__main__':
     app.run(debug=True)
