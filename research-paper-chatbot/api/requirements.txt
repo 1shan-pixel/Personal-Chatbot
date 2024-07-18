@@ -1,0 +1,16 @@
+Flask==3.0.2
+flask-cors==4.0.1
+python-dotenv==1.0.1
+groq==0.9.0
+requests==2.32.3
+spacy==3.7.5
+google-search-results==2.4.2
+scikit-learn==1.5.1
+langchain-astradb==0.3.3
+transformers==4.42.4
+langchain-core==0.2.20
+langchain-groq==0.1.6
+langchain==0.2.8
+langchain-community==0.2.7
+sentence-transformers==3.0.1
+langchain-huggingface==0.0.3

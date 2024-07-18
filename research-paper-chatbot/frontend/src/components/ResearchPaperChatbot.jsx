@@ -28,7 +28,6 @@ const ResearchPaperChatbot = () => {
     const handleBack = () => {
         if (selectedPaper) {
             setSelectedPaper(null);
-            setChatHistory([]);
         } else {
             setShowPapers(false);
             setResearchPapers([]);

@@ -11,6 +11,12 @@ from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 from langchain_core.messages import SystemMessage, HumanMessage
 from langchain_groq import ChatGroq
+from langchain.memory import ConversationBufferMemory
+from langchain.schema import Document
+#from langchain_openai import OpenAIEmbeddings
+from langchain_huggingface import HuggingFaceEmbeddings
+from langchain_astradb import AstraDBVectorStore
+
 
 load_dotenv()
 
@@ -18,9 +24,29 @@ app = Flask(__name__)
 CORS(app)
 
 groq_api_key = os.getenv("GROQ_API_KEY")
+OpenAi_api_key = os.getenv("OPENAI_API_KEY")
 client = Groq(api_key=groq_api_key)
 
 nlp = spacy.load("en_core_web_sm")
+
+# Initialize memory
+conversation_memory = ConversationBufferMemory(return_messages=True)
+
+# Initialize Astra DB for paper memory
+astra_db_id = os.getenv("ASTRA_DB_ID")
+astra_db_application_token = os.getenv("ASTRA_DB_APPLICATION_TOKEN")
+astra_db_api_endpoint = os.getenv("ASTRA_DB_API_ENDPOINT")
+
+
+embeddings = HuggingFaceEmbeddings()
+
+paper_vector_store = AstraDBVectorStore(
+    embedding=embeddings,
+    collection_name="research_papers",
+    api_endpoint=astra_db_api_endpoint,
+    token=astra_db_application_token,
+)
+
 
 def preprocess_text(text):
     doc = nlp(text.lower())
@@ -78,7 +104,7 @@ def get_scholar_results():
 
     search = GoogleSearch(params)
     results = search.get_dict()
-   
+
     papers = [
         {
             'id': index + 1,
@@ -125,7 +151,7 @@ def chat_endpoint():
     paper_info = data.get('paperInfo')
 
     if not chat_history or not paper_info:
-        return jsonify({'error': 'Missing required fields: chatHistory or paperInfo'}), 400
+        return jsonify({'error': 'Missing required fields: chat_history or paperInfo'}), 400
 
     system_template = "You are a helpful assistant discussing the research paper titled '{title}'. Here's a brief summary of the paper: {summary}"
     
@@ -134,14 +160,31 @@ def chat_endpoint():
         model_name="llama3-70b-8192"
     )
 
-    # Create the prompt messages
     system_message = SystemMessage(content=system_template.format(title=paper_info['title'], summary=paper_info['summary']))
-    messages = [system_message] + [
-        HumanMessage(content=msg['content']) if msg['role'] == 'user' else SystemMessage(content=msg['content']) for msg in chat_history
+    
+    paper_doc = Document(
+        page_content=f"Title: {paper_info['title']}\nSummary: {paper_info['summary']}",
+        metadata={"title": paper_info['title']}
+    )
+    print(paper_doc)
+    paper_vector_store.add_documents([paper_doc])
+
+
+    # Combine all messages
+    messages = [
+        system_message,
+        HumanMessage(content=chat_history[-1]['content'])
     ]
+
+    # Add conversation history
+    messages.extend(conversation_memory.chat_memory.messages)
 
     try:
         response = chat.invoke(messages)
+        
+        # Save the conversation
+        conversation_memory.chat_memory.add_user_message(chat_history[-1]['content'])
+        conversation_memory.chat_memory.add_ai_message(response.content)
 
         return jsonify({
             "content": response.content,
@@ -153,17 +196,15 @@ def chat_endpoint():
             "content": f"I'm sorry, I encountered an error while processing your request: {str(e)}",
             "role": "assistant"
         }), 500
-
-
 @app.route('/recommend-papers', methods=['POST'])
 def api_recommend_papers():
     data = request.json
     target_paper = data.get('targetPaper')
     all_papers = data.get('allPapers')
-    print(target_paper)
 
     recommendations = recommend_papers(target_paper, all_papers)
     return jsonify(recommendations)
+
 
 if __name__ == '__main__':
     app.run(debug=True)
