@@ -31,7 +31,7 @@ const ChatInterface = ({ chatHistory, onSendMessage }) => {
                     className="flex-grow p-2 border rounded mr-2 resize-none"
                     rows="1"
                 />
-                <button onClick={handleSend} className="bg-blue-500 text-white p-2 rounded">Send</button>
+                <button onClick={handleSend} className="bg-gray-500 text-white p-2 rounded">Send</button>
             </div>
         </div>
     );

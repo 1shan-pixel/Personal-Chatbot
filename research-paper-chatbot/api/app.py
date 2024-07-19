@@ -162,19 +162,29 @@ def chat_endpoint():
 
     system_message = SystemMessage(content=system_template.format(title=paper_info['title'], summary=paper_info['summary']))
     
-    paper_doc = Document(
-        page_content=f"Title: {paper_info['title']}\nSummary: {paper_info['summary']}",
-        metadata={"title": paper_info['title']}
+    # Check if the paper has been discussed before
+    previous_discussion_docs = paper_vector_store.similarity_search(
+        query=f"title: {paper_info['title']}",
+        top_k=1
     )
-    print(paper_doc)
-    paper_vector_store.add_documents([paper_doc])
 
+    if previous_discussion_docs:
+        previous_discussion = previous_discussion_docs[0].metadata.get('chat_history', [])
+    else:
+        previous_discussion = []
 
     # Combine all messages
-    messages = [
-        system_message,
-        HumanMessage(content=chat_history[-1]['content'])
-    ]
+    messages = [system_message]
+    
+    # If the paper was discussed before, add the previous conversation to the messages
+    for msg in previous_discussion:
+        if msg['role'] == 'human':
+            messages.append(HumanMessage(content=msg['content']))
+        elif msg['role'] == 'assistant':
+            messages.append(SystemMessage(content=msg['content']))
+    
+    # Add the latest user message to the messages
+    messages.append(HumanMessage(content=chat_history[-1]['content']))
 
     # Add conversation history
     messages.extend(conversation_memory.chat_memory.messages)
@@ -182,9 +192,19 @@ def chat_endpoint():
     try:
         response = chat.invoke(messages)
         
-        # Save the conversation
+        # Save the conversation in memory and associate it with the paper
         conversation_memory.chat_memory.add_user_message(chat_history[-1]['content'])
         conversation_memory.chat_memory.add_ai_message(response.content)
+        
+        # Update paper document with the new chat history
+        paper_doc = Document(
+            page_content=f"Title: {paper_info['title']}\nSummary: {paper_info['summary']}",
+            metadata={
+                "title": paper_info['title'],
+                "chat_history": conversation_memory.chat_memory.messages
+            }
+        )
+        paper_vector_store.add_documents([paper_doc])
 
         return jsonify({
             "content": response.content,
@@ -196,6 +216,7 @@ def chat_endpoint():
             "content": f"I'm sorry, I encountered an error while processing your request: {str(e)}",
             "role": "assistant"
         }), 500
+
 @app.route('/recommend-papers', methods=['POST'])
 def api_recommend_papers():
     data = request.json

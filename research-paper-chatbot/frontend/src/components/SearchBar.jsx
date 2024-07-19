@@ -22,7 +22,7 @@ const SearchBar = ({ onSearch }) => {
                 className="w-full p-2 border rounded mb-2"
                 rows={1}
             />
-            <button onClick={handleSearch} className="w-full bg-blue-500 text-white p-2 rounded">Search Papers</button>
+            <button onClick={handleSearch} className="w-full bg-gray-500 text-white p-2 rounded">Search Papers</button>
         </div>
     );
 };

@@ -21,7 +21,7 @@ const ResearchPaperChatbot = () => {
     const handlePaperSelect = (paper) => {
         setSelectedPaper(paper);
         setChatHistory([
-            { role: "assistant", content: `Great! Let's discuss the paper titled "${paper.title}". What would you like to know about it?` }
+            { role: "assistant", content: `**Great! Let's discuss the paper titled "${paper.title}"**.\n\n\n **Here is its summary:**  ${paper.summary}` }
         ]);
     };
 
@@ -32,6 +32,17 @@ const ResearchPaperChatbot = () => {
             setShowPapers(false);
             setResearchPapers([]);
         }
+    };
+    const handleRecommendedPaperSelect = (paper) => {
+        setSelectedPaper(paper);
+        // Add a system message to the chat history about the new paper
+        setChatHistory(prevHistory => [
+            ...prevHistory,
+            { 
+                role: "system", 
+                content: `Switching discussion to paper: "${paper.title}".\n\n\nHere is its summary: ${paper.summary}`
+            }
+        ]);
     };
 
     const handleSendMessage = async (userInput) => {
@@ -113,7 +124,7 @@ const ResearchPaperChatbot = () => {
                         <SearchBar onSearch={handleSearchPapers} />
                     ) : (
                         <div>
-                            <button onClick={handleBack} className="bg-blue-500 text-white p-2 rounded mb-2">Back</button>
+                            <button onClick={handleBack} className="bg-gray-500 text-white p-2 rounded mb-2">Back</button>
                             {!selectedPaper ? (
                                 <PaperList papers={researchPapers} onPaperSelect={handlePaperSelect} />
                             ) : (
@@ -129,7 +140,11 @@ const ResearchPaperChatbot = () => {
                                 <h1> No papers</h1>
                                 
                             ):(
-                                <RecommendedPapers selectedPaper={selectedPaper} researchPaperList={researchPapers} />
+                                <RecommendedPapers 
+                                selectedPaper={selectedPaper} 
+                                researchPaperList={researchPapers.filter(p => p.id !== selectedPaper.id)}
+                                onPaperSelect={handleRecommendedPaperSelect}
+                            />
                                 
                             )}
                         </div>
