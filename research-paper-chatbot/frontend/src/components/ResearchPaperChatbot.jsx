@@ -48,7 +48,7 @@ const ResearchPaperChatbot = () => {
     const handleSendMessage = async (userInput) => {
         const updatedHistory = [
             ...chatHistory,
-            { role: "user", content: userInput }
+            { role: "human", content: userInput } // did human instead of user for langchain integration . 
         ];
 
         setChatHistory(updatedHistory);
@@ -67,7 +67,7 @@ const ResearchPaperChatbot = () => {
                     }
                 }),
             });
-
+            console.log(response)
             if (!response.ok) {
                 throw new Error('Network response was not ok');
             }

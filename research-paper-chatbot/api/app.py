@@ -9,13 +9,17 @@ import spacy
 from serpapi import GoogleSearch
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
-from langchain_core.messages import SystemMessage, HumanMessage
 from langchain_groq import ChatGroq
-from langchain.memory import ConversationBufferMemory
-from langchain.schema import Document
-#from langchain_openai import OpenAIEmbeddings
+from langchain.memory import ConversationBufferWindowMemory
+from langchain.schema import Document , AIMessage , HumanMessage , SystemMessage 
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_astradb import AstraDBVectorStore
+from langchain.text_splitter import TokenTextSplitter
+from langchain.schema.runnable import RunnablePassthrough, RunnableLambda
+from langchain.prompts import ChatPromptTemplate, MessagesPlaceholder
+from operator import itemgetter
+from langchain_community.chat_message_histories import ChatMessageHistory
+from langchain_core.runnables.history import RunnableWithMessageHistory
 
 
 load_dotenv()
@@ -30,7 +34,7 @@ client = Groq(api_key=groq_api_key)
 nlp = spacy.load("en_core_web_sm")
 
 # Initialize memory
-conversation_memory = ConversationBufferMemory(return_messages=True)
+conversation_memory = ConversationBufferWindowMemory(k=10, return_messages=True)
 
 # Initialize Astra DB for paper memory
 astra_db_id = os.getenv("ASTRA_DB_ID")
@@ -144,78 +148,63 @@ def download_arxiv_pdf_endpoint():
 
     return download_arxiv_pdf(arxiv_id, download_dir, paper_title)
 
+
 @app.route('/chat', methods=['POST'])
 def chat_endpoint():
     data = request.json
-    chat_history = data.get('chatHistory')
-    paper_info = data.get('paperInfo')
-
-    if not chat_history or not paper_info:
-        return jsonify({'error': 'Missing required fields: chat_history or paperInfo'}), 400
-
-    system_template = "You are a helpful assistant discussing the research paper titled '{title}'. Here's a brief summary of the paper: {summary}"
+    chat_history = data['chatHistory']
+    paper_info = data['paperInfo']
     
-    chat = ChatGroq(
+    system_message = {
+        "role": "system",
+        "content": f"You are a helpful assistant discussing the research paper titled '{paper_info['title']}'. Here's a brief summary of the paper: {paper_info['summary']}"
+    }
+    
+    try:
+        chat = ChatGroq(
         temperature=0.2,
         model_name="llama3-70b-8192"
     )
+        prompt = ChatPromptTemplate(
+         messages=[
+        {"role": "system", "content": system_message["content"]},
+        MessagesPlaceholder("history"),
+        {"role": "human", "content": "{input}"}
+    ]
+)
+        runnable = prompt| chat
+        formatted_chat_history = [
+        {"role": msg['role'], "content": msg['content']}
+            for msg in chat_history
+            ]           
+        temp_chat_history = ChatMessageHistory(messages=formatted_chat_history)
+        withMessageHistory = RunnableWithMessageHistory(
+            runnable=runnable,
+            getMessageHistory=lambda _: temp_chat_history,
+            inputMessagesKey="input",
+            historyMessagesKey="history",
+        )
 
-    system_message = SystemMessage(content=system_template.format(title=paper_info['title'], summary=paper_info['summary']))
-    
-    # Check if the paper has been discussed before
-    previous_discussion_docs = paper_vector_store.similarity_search(
-        query=f"title: {paper_info['title']}",
-        top_k=1
-    )
+        user_message = chat_history[-1]['content'] if chat_history else " "
+        response = withMessageHistory.invoke(
+            {
 
-    if previous_discussion_docs:
-        previous_discussion = previous_discussion_docs[0].metadata.get('chat_history', [])
-    else:
-        previous_discussion = []
-
-    # Combine all messages
-    messages = [system_message]
-    
-    # If the paper was discussed before, add the previous conversation to the messages
-    for msg in previous_discussion:
-        if msg['role'] == 'human':
-            messages.append(HumanMessage(content=msg['content']))
-        elif msg['role'] == 'assistant':
-            messages.append(SystemMessage(content=msg['content']))
-    
-    # Add the latest user message to the messages
-    messages.append(HumanMessage(content=chat_history[-1]['content']))
-
-    # Add conversation history
-    messages.extend(conversation_memory.chat_memory.messages)
-
-    try:
-        response = chat.invoke(messages)
-        
-        # Save the conversation in memory and associate it with the paper
-        conversation_memory.chat_memory.add_user_message(chat_history[-1]['content'])
-        conversation_memory.chat_memory.add_ai_message(response.content)
-        
-        # Update paper document with the new chat history
-        paper_doc = Document(
-            page_content=f"Title: {paper_info['title']}\nSummary: {paper_info['summary']}",
-            metadata={
-                "title": paper_info['title'],
-                "chat_history": conversation_memory.chat_memory.messages
+            "input" : user_message
             }
         )
-        paper_vector_store.add_documents([paper_doc])
-
+        print(response)
         return jsonify({
-            "content": response.content,
+            "content": response["content"],
             "role": "assistant"
         })
+
     except Exception as e:
-        print(f"Error: {str(e)}")
+        print(e)
         return jsonify({
-            "content": f"I'm sorry, I encountered an error while processing your request: {str(e)}",
+            "content": "I'm sorry, I encountered an error while processing your request.",
             "role": "assistant"
         }), 500
+
 
 @app.route('/recommend-papers', methods=['POST'])
 def api_recommend_papers():

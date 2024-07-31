@@ -5,7 +5,7 @@ import { tomorrow } from 'react-syntax-highlighter/dist/esm/styles/prism';
 
 const ChatMessage = ({ message }) => {
     return (
-        <div className={`flex ${message.role === "user" ? 'justify-end' : 'justify-start'} mb-4`}>
+        <div className={`flex ${message.role === "human" ? 'justify-end' : 'justify-start'} mb-4`}>
             <div className={`max-w-3/4 p-3 rounded-lg ${message.role === "user" ? 'bg-blue-500 text-white' : 'bg-gray-200 text-black'}`}>
                 <ReactMarkdown
                     components={{
